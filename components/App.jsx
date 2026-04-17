@@ -8,13 +8,10 @@ import { PracticeSession } from "@/lib/session";
 import { evaluatePose, FeedbackHistory } from "@/lib/feedback";
 import { StageSkeleton } from "@/lib/skeletonIcons";
 import {
-  getSchools,
-  createSchool,
-  verifyAdminPassword,
+  getLocalUserId,
   saveTrainingData,
   deleteTrainingData,
-  deleteAllTrainingDataBySchool,
-  DEFAULT_SCHOOL_ID,
+  getTrainingDataByMotion,
 } from "@/lib/supabase";
 
 // 스켈레톤 연결선
@@ -26,41 +23,41 @@ const CONNECTIONS = [
 // 학습 콘텐츠 데이터
 const LEARN_CONTENT = {
   intro: {
-    title: "생존수영이란",
+    title: "운동 자세의 중요성",
     icon: "📘",
-    content: `생존수영은 위급한 수상 상황에서 자신의 생명을 지키기 위한 기본적인 수영 기술입니다.
+    content: `올바른 자세로 운동하는 것은 부상 예방과 효과적인 근력 발달에 필수적입니다.
 
-물에 빠졌을 때 구조대가 올 때까지 체력을 보존하고, 침착하게 대응하는 방법을 배웁니다.
+잘못된 자세로 운동하면 관절과 근육에 불필요한 부담을 주어 부상 위험이 높아집니다.
 
-2015년부터 초등학교 정규 교육과정에 포함되어 모든 학생들이 배우게 되었습니다.`,
+AI 기반 자세 분석을 통해 실시간으로 피드백을 받으며 올바른 운동 습관을 기를 수 있습니다.`,
     points: [
-      "물에서 호흡 유지하기",
-      "체온 보존 자세 취하기",
-      "구조 신호 보내기",
-      "기본 영법으로 이동하기"
+      "부상 예방을 위한 올바른 폼 유지",
+      "근육 발달 효과 극대화",
+      "관절 보호 및 균형 잡힌 발달",
+      "지속 가능한 운동 습관 형성"
     ]
   },
   safety: {
-    title: "물놀이 안전수칙",
+    title: "운동 안전수칙",
     icon: "⚠️",
-    content: `안전한 물놀이를 위해 반드시 지켜야 할 수칙들입니다.`,
+    content: `안전하고 효과적인 운동을 위해 반드시 지켜야 할 수칙들입니다.`,
     points: [
-      "수영 전 충분한 준비운동 하기",
-      "보호자나 안전요원이 있는 곳에서만 수영하기",
-      "음식을 먹은 직후에는 수영하지 않기",
-      "수심을 확인하고 뛰어들지 않기",
-      "구명조끼 착용하기"
+      "운동 전 충분한 스트레칭과 워밍업",
+      "자신의 체력에 맞는 강도로 시작",
+      "통증이 느껴지면 즉시 운동 중단",
+      "충분한 휴식과 수분 섭취",
+      "올바른 호흡법 유지"
     ]
   },
-  cpr: {
-    title: "심폐소생술",
-    icon: "❤️",
-    content: `익수자를 구조한 후 의식이 없고 호흡이 없다면 즉시 심폐소생술을 시작해야 합니다.`,
+  stretch: {
+    title: "스트레칭 가이드",
+    icon: "🧘",
+    content: `운동 전후 스트레칭은 부상 예방과 회복에 매우 중요합니다.`,
     points: [
-      "119에 신고하기",
-      "가슴 압박 30회 실시",
-      "인공호흡 2회 실시",
-      "구급대가 올 때까지 반복"
+      "운동 전: 동적 스트레칭으로 몸 풀기",
+      "운동 후: 정적 스트레칭으로 근육 이완",
+      "각 스트레칭 15-30초 유지",
+      "통증 없이 편안한 범위에서 실시"
     ]
   }
 };
@@ -89,23 +86,17 @@ export default function App() {
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState(() => {
     if (typeof window !== "undefined") {
-      return localStorage.getItem("swim_camera_id") || "";
+      return localStorage.getItem("exercise_camera_id") || "";
     }
     return "";
   });
-  // 학교/관리자 상태
-  const [schools, setSchools] = useState([]);
-  const [selectedSchoolId, setSelectedSchoolId] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("swim_school_id") || "";
-    }
-    return "";
-  });
+  // 관리자 상태
   const [isAdmin, setIsAdmin] = useState(false);
-  const [dataLoading, setDataLoading] = useState(true);
-  const [loadingMsg, setLoadingMsg] = useState("");
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
+  // 데이터 로딩 상태
+  const [dataLoading, setDataLoading] = useState(true);
+  const [loadingMsg, setLoadingMsg] = useState("");
 
   // 피드백 상태
   const [feedback, setFeedback] = useState(null);
@@ -156,29 +147,9 @@ export default function App() {
         classifiersRef.current[i] = new KNNClassifier(5);
       }
 
-      // 학교 목록 로드
-      try {
-        const schoolList = await getSchools();
-        setSchools(schoolList);
-      } catch (err) {
-        console.error("Failed to load schools:", err);
-      }
-
-      // Supabase에서 학습 데이터 로드 (동작별 + step name 라벨)
-      const savedSchoolId = localStorage.getItem("swim_school_id") || "";
-      try {
-        for (let i = 1; i <= 6; i++) {
-          await classifiersRef.current[i].loadFromSupabase(
-            i.toString(), MOTIONS[i].steps, savedSchoolId || null
-          );
-        }
-        console.log("Training data loaded from Supabase");
-      } catch (err) {
-        console.error("Failed to load training data:", err);
-      }
-
-      // Supabase 데이터가 없는 동작만 localStorage에서 병합
+      // localStorage에서 학습 데이터 로드 (개인 사용자용)
       mergeLocalStorage();
+      console.log("Training data loaded from localStorage");
       setDataLoading(false);
 
       // MediaPipe 로드
@@ -533,24 +504,19 @@ export default function App() {
     const clf = classifiersRef.current[currentMotion];
 
     // 관리자 모드일 때만 Supabase에 저장
-    if (isAdmin && selectedSchoolId) {
-      const success = await clf.addSampleToSupabase(
-        currentMotion.toString(),
-        selectedStep,
-        stepName,
-        features,
-        selectedSchoolId
-      );
-      if (success) {
+    if (isAdmin) {
+      const saved = await saveTrainingData(currentMotion, selectedStep, features);
+      if (saved) {
+        clf.addSample(stepName, features);
         const cnt = clf.getSampleCounts()[stepName] || 0;
-        addFlash(`${stepName} 녹화! (${cnt}개)`);
+        addFlash(`${stepName} 녹화! (${cnt}개, 서버)`);
       } else {
-        showToast("저장 실패", "error");
+        showToast("서버 저장 실패", "error");
       }
     } else {
-      // 비관리자: localStorage에만 저장 (기존 방식)
+      // 일반 사용자: localStorage에만 저장
       clf.addSample(stepName, features);
-      localStorage.setItem(`swim_knn_${currentMotion}`, clf.export());
+      localStorage.setItem(`exercise_knn_${currentMotion}`, clf.export());
       const cnt = clf.getSampleCounts()[stepName] || 0;
       addFlash(`${stepName} 녹화! (${cnt}개)`);
     }
@@ -607,7 +573,7 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════
   function saveHistory(session) {
     if (!session || !session.done) return;
-    const history = JSON.parse(localStorage.getItem("swim_history") || "[]");
+    const history = JSON.parse(localStorage.getItem("exercise_history") || "[]");
     history.unshift({
       id: Date.now(),
       motionId: session.mid,
@@ -617,7 +583,7 @@ export default function App() {
       cycles: session.cyclesDone,
     });
     // 최근 100개만 보관
-    localStorage.setItem("swim_history", JSON.stringify(history.slice(0, 100)));
+    localStorage.setItem("exercise_history", JSON.stringify(history.slice(0, 100)));
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -629,13 +595,13 @@ export default function App() {
     return (
       <div className="main-content">
         <div className="home-hero">
-          <div className="hero-icon">🏊</div>
-          <h1>생존수영 트레이너</h1>
-          <p>AI 기반 실시간 동작 분석 시스템</p>
+          <div className="hero-icon">💪</div>
+          <h1>AI 운동 자세 코치</h1>
+          <p>AI 기반 실시간 자세 분석 시스템</p>
         </div>
 
         <div className="home-section">
-          <div className="section-title">🎯 생존수영 동작</div>
+          <div className="section-title">🎯 운동 목록</div>
           <div className="motion-cards-grid">
             {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
               const clf = classifiersRef.current[id];
@@ -682,26 +648,26 @@ export default function App() {
       <div className="main-content">
         <div className="page-header">
           <h1>📖 학습</h1>
-          <p>생존수영의 기초부터 응급처치까지</p>
+          <p>운동 자세의 기초부터 안전수칙까지</p>
         </div>
 
-        {/* 생존수영 소개 */}
+        {/* 운동 기초 */}
         <div className="learn-category">
-          <div className="category-header">생존수영 소개</div>
+          <div className="category-header">운동 기초</div>
           <div className="learn-item" onClick={() => setLearnView("intro")}>
             <span className="item-icon">📘</span>
             <div className="item-text">
-              <h4>생존수영이란</h4>
-              <p>생존수영의 정의와 필요성</p>
+              <h4>운동 자세의 중요성</h4>
+              <p>올바른 자세의 필요성</p>
             </div>
             <span className="item-arrow">›</span>
           </div>
         </div>
 
-        {/* 생존뜨기 */}
+        {/* 하체 운동 */}
         <div className="learn-category">
-          <div className="category-header">생존뜨기</div>
-          {[1, 2, 6].filter(id => !MOTIONS[id].hidden).map(id => {
+          <div className="category-header">하체 운동</div>
+          {[1, 2].filter(id => MOTIONS[id] && !MOTIONS[id].hidden).map(id => {
             const m = MOTIONS[id];
             return (
               <div key={id} className="learn-item" onClick={() => setLearnView(id)}>
@@ -716,10 +682,10 @@ export default function App() {
           })}
         </div>
 
-        {/* 생존수영 영법 */}
+        {/* 상체/코어 운동 */}
         <div className="learn-category">
-          <div className="category-header">생존수영 영법</div>
-          {[5, 4, 3].map(id => {
+          <div className="category-header">상체/코어 운동</div>
+          {[3, 4, 5].filter(id => MOTIONS[id] && !MOTIONS[id].hidden).map(id => {
             const m = MOTIONS[id];
             return (
               <div key={id} className="learn-item" onClick={() => setLearnView(id)}>
@@ -734,22 +700,40 @@ export default function App() {
           })}
         </div>
 
-        {/* 안전/응급 */}
+        {/* 전신 운동 */}
         <div className="learn-category">
-          <div className="category-header">수상안전 / 응급처치</div>
+          <div className="category-header">전신 운동</div>
+          {[6].filter(id => MOTIONS[id] && !MOTIONS[id].hidden).map(id => {
+            const m = MOTIONS[id];
+            return (
+              <div key={id} className="learn-item" onClick={() => setLearnView(id)}>
+                <span className="item-icon">{m.icon}</span>
+                <div className="item-text">
+                  <h4>{m.name}</h4>
+                  <p>{m.sub}</p>
+                </div>
+                <span className="item-arrow">›</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 안전 가이드 */}
+        <div className="learn-category">
+          <div className="category-header">안전 가이드</div>
           <div className="learn-item" onClick={() => setLearnView("safety")}>
             <span className="item-icon">⚠️</span>
             <div className="item-text">
-              <h4>물놀이 안전수칙</h4>
-              <p>안전한 물놀이를 위한 수칙</p>
+              <h4>운동 안전수칙</h4>
+              <p>안전한 운동을 위한 수칙</p>
             </div>
             <span className="item-arrow">›</span>
           </div>
-          <div className="learn-item" onClick={() => setLearnView("cpr")}>
-            <span className="item-icon">❤️</span>
+          <div className="learn-item" onClick={() => setLearnView("stretch")}>
+            <span className="item-icon">🧘</span>
             <div className="item-text">
-              <h4>심폐소생술</h4>
-              <p>익수자 구조 후 응급처치</p>
+              <h4>스트레칭 가이드</h4>
+              <p>부상 예방을 위한 스트레칭</p>
             </div>
             <span className="item-arrow">›</span>
           </div>
@@ -886,14 +870,8 @@ export default function App() {
               setHoldGoalInput(m.holdGoal || 30);
             }}
           >
-            🏊 연습하러 가기
+            💪 연습하러 가기
           </button>
-
-          <div className="ref-links">
-            <a href="https://www.safetv.go.kr" target="_blank" rel="noopener noreferrer">
-              📺 안전한TV 교육영상 보기
-            </a>
-          </div>
         </div>
       </div>
     );
@@ -915,8 +893,8 @@ export default function App() {
     return (
       <div className="main-content">
         <div className="page-header">
-          <h1>🏊 연습</h1>
-          <p>동작을 선택하여 연습을 시작하세요</p>
+          <h1>💪 연습</h1>
+          <p>운동을 선택하여 연습을 시작하세요</p>
         </div>
 
         <div className="motion-select">
@@ -1422,7 +1400,7 @@ export default function App() {
 
   // 기록 탭
   function renderHistoryTab() {
-    const history = JSON.parse(localStorage.getItem("swim_history") || "[]");
+    const history = JSON.parse(localStorage.getItem("exercise_history") || "[]");
 
     // 통계 계산
     const totalSessions = history.length;
@@ -1491,14 +1469,11 @@ export default function App() {
     );
   }
 
-  // localStorage 데이터 병합 (Supabase 데이터가 없는 동작만)
+  // localStorage 데이터 로드
   function mergeLocalStorage() {
     for (let i = 1; i <= 6; i++) {
       const clf = classifiersRef.current[i];
-      // Supabase에서 이미 로드된 데이터가 있으면 건너뛰기 (중복 방지)
-      if (clf.totalSamples > 0) continue;
-
-      const saved = localStorage.getItem(`swim_knn_${i}`);
+      const saved = localStorage.getItem(`exercise_knn_${i}`);
       if (saved) {
         try {
           const localSamples = JSON.parse(saved);
@@ -1508,158 +1483,66 @@ export default function App() {
             }
           }
         } catch (e) {
-          console.error(`Failed to merge local data for motion ${i}:`, e);
+          console.error(`Failed to load local data for motion ${i}:`, e);
         }
       }
     }
   }
 
-  // 학교 관리자 로그인
-  async function handleAdminLogin(schoolId, password) {
-    try {
-      const valid = await verifyAdminPassword(schoolId, password);
-      if (valid) {
-        setIsAdmin(true);
-        setSelectedSchoolId(schoolId);
-        localStorage.setItem("swim_school_id", schoolId);
-        showToast("관리자 로그인 성공");
+  // 학습 데이터 삭제
+  async function handleDeleteTrainingData(motionId) {
+    const clf = classifiersRef.current[motionId];
+    if (clf) {
+      clf.clear();
+    }
+    localStorage.removeItem(`exercise_knn_${motionId}`);
 
-        // 해당 학교 데이터 다시 로드
-        setDataLoading(true);
+    // 관리자 모드일 때만 Supabase에서도 삭제
+    if (isAdmin) {
+      await deleteTrainingData(motionId);
+    }
+
+    showToast("학습 데이터 삭제 완료");
+    forceUpdate(n => n + 1);
+  }
+
+  // 관리자 로그인
+  async function handleAdminLogin(password) {
+    // 간단한 비밀번호 검증 (실제로는 환경변수나 서버에서 검증)
+    const ADMIN_PASSWORD = "admin2026"; // 기본 관리자 비밀번호
+
+    if (password === ADMIN_PASSWORD) {
+      setIsAdmin(true);
+      setShowAdminLogin(false);
+      setAdminPassword("");
+
+      // Supabase에서 학습 데이터 로드
+      setDataLoading(true);
+      setLoadingMsg("서버 데이터 로딩 중...");
+      try {
         for (let i = 1; i <= 6; i++) {
-          await classifiersRef.current[i].loadFromSupabase(
-            i.toString(), MOTIONS[i].steps, schoolId
-          );
-        }
-        mergeLocalStorage();
-        setDataLoading(false);
-        forceUpdate(n => n + 1);
-      } else {
-        showToast("비밀번호가 틀립니다", "error");
-      }
-    } catch (err) {
-      console.error("Admin login failed:", err);
-      showToast("로그인 실패", "error");
-    }
-  }
-
-  // 학교 생성
-  async function handleCreateSchool(name, password) {
-    try {
-      const newSchool = await createSchool(name, password);
-      setSchools(prev => [...prev, newSchool]);
-      showToast(`'${name}' 학교가 생성되었습니다`);
-      return newSchool;
-    } catch (err) {
-      console.error("Create school failed:", err);
-      if (err.message?.includes("duplicate")) {
-        showToast("이미 존재하는 학교명입니다", "error");
-      } else {
-        showToast("학교 생성 실패", "error");
-      }
-      return null;
-    }
-  }
-
-  // localStorage → Supabase 업로드
-  // motionId: 특정 동작만 업로드 (null이면 전체)
-  // overwrite: true면 덮어쓰기, false면 추가
-  async function handleUploadToSupabase(motionId = null, overwrite = false) {
-    const schoolId = selectedSchoolId || DEFAULT_SCHOOL_ID;
-    let totalUploaded = 0;
-    const motionIds = motionId ? [motionId] : [1, 2, 3, 4, 5, 6];
-
-    // 총 업로드할 샘플 수 미리 계산
-    let totalToUpload = 0;
-    for (const mid of motionIds) {
-      const saved = localStorage.getItem(`swim_knn_${mid}`);
-      if (!saved) continue;
-      const localSamples = JSON.parse(saved);
-      const m = MOTIONS[mid];
-      for (const [label, features] of Object.entries(localSamples)) {
-        if (m.steps.indexOf(label) !== -1) totalToUpload += features.length;
-      }
-    }
-
-    if (totalToUpload === 0) {
-      await showModal({ title: "업로드 실패", message: "업로드할 로컬 데이터가 없습니다." });
-      return;
-    }
-
-    setLoadingMsg(`업로드 준비 중... 0/${totalToUpload}`);
-    setDataLoading(true);
-
-    try {
-      if (overwrite) {
-        setLoadingMsg("기존 데이터 삭제 중...");
-        if (motionId) {
-          await deleteTrainingData(motionId.toString(), schoolId);
-        } else {
-          await deleteAllTrainingDataBySchool(schoolId);
-        }
-      }
-
-      for (const mid of motionIds) {
-        const saved = localStorage.getItem(`swim_knn_${mid}`);
-        if (!saved) continue;
-
-        const localSamples = JSON.parse(saved);
-        const m = MOTIONS[mid];
-
-        for (const [label, features] of Object.entries(localSamples)) {
-          const stepIndex = m.steps.indexOf(label);
-          if (stepIndex === -1) continue;
-
-          for (const feat of features) {
-            await saveTrainingData(mid.toString(), stepIndex, feat, schoolId);
-            totalUploaded++;
-            if (totalUploaded % 5 === 0 || totalUploaded === totalToUpload) {
-              setLoadingMsg(`업로드 중... ${totalUploaded}/${totalToUpload}`);
+          classifiersRef.current[i]?.clear();
+          const data = await getTrainingDataByMotion(i);
+          const m = MOTIONS[i];
+          for (const item of data) {
+            const stepName = m.steps[item.step_index];
+            if (stepName && item.features) {
+              classifiersRef.current[i].addSample(stepName, item.features);
             }
           }
         }
+        console.log("Admin: Training data loaded from Supabase");
+        showToast("관리자 로그인 성공");
+      } catch (err) {
+        console.error("Failed to load training data:", err);
+        showToast("데이터 로드 실패", "error");
       }
-      // 업로드 성공 후 localStorage 정리 (중복 로딩 방지)
-      for (const mid of motionIds) {
-        localStorage.removeItem(`swim_knn_${mid}`);
-      }
-
-      // Supabase에서 다시 로드하여 라벨 동기화
-      for (let i = 1; i <= 6; i++) {
-        await classifiersRef.current[i].loadFromSupabase(
-          i.toString(), MOTIONS[i].steps, schoolId || null
-        );
-      }
-
       setDataLoading(false);
       setLoadingMsg("");
       forceUpdate(n => n + 1);
-      await showModal({ title: "업로드 완료", message: `${totalUploaded}개 샘플이 서버에 업로드되었습니다.\n로컬 임시 데이터는 정리되었습니다.` });
-    } catch (err) {
-      console.error("Upload failed:", err);
-      setDataLoading(false);
-      setLoadingMsg("");
-      await showModal({ title: "업로드 오류", message: `업로드 중 오류가 발생했습니다.\n(${totalUploaded}/${totalToUpload}개 완료)` });
+    } else {
+      showToast("비밀번호가 틀립니다", "error");
     }
-  }
-
-  // 학교 선택
-  async function handleSchoolSelect(schoolId) {
-    setIsAdmin(false);
-    setSelectedSchoolId(schoolId);
-    localStorage.setItem("swim_school_id", schoolId);
-
-    // 해당 학교 데이터 로드
-    setDataLoading(true);
-    for (let i = 1; i <= 6; i++) {
-      await classifiersRef.current[i].loadFromSupabase(
-        i.toString(), MOTIONS[i].steps, schoolId || null
-      );
-    }
-    mergeLocalStorage();
-    setDataLoading(false);
-    forceUpdate(n => n + 1);
-    showToast(schoolId ? "학교 데이터 로드 완료" : "기본 데이터 로드 완료");
   }
 
   // 설정 탭
@@ -1671,47 +1554,16 @@ export default function App() {
           <p>앱 설정 및 데이터 관리</p>
         </div>
 
-        {/* 학교 설정 */}
+        {/* 관리자 설정 */}
         <div className="settings-section">
-          <h3>학교 설정</h3>
-
-          {/* 현재 상태 */}
+          <h3>관리자 모드</h3>
           <div className="setting-item">
-            <span className="setting-icon">🏫</span>
+            <span className="setting-icon">{isAdmin ? "🔓" : "🔒"}</span>
             <div className="setting-text">
-              <h4>현재 학교</h4>
-              <p>
-                {selectedSchoolId
-                  ? schools.find(s => s.id === selectedSchoolId)?.name || "알 수 없음"
-                  : "기본 (개발자 제공)"}
-                {isAdmin && " (관리자)"}
-              </p>
+              <h4>상태</h4>
+              <p>{isAdmin ? "관리자 모드 활성화 (서버에 데이터 저장)" : "일반 모드 (로컬에 데이터 저장)"}</p>
             </div>
           </div>
-
-          {/* 학교 선택 */}
-          <select
-            value={selectedSchoolId}
-            onChange={(e) => handleSchoolSelect(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "12px",
-              background: "var(--card)",
-              border: "1px solid var(--border)",
-              borderRadius: "8px",
-              color: "var(--text)",
-              fontSize: "14px",
-              marginTop: "8px",
-              cursor: "pointer",
-            }}
-          >
-            <option value="">기본 (개발자 제공 데이터)</option>
-            {schools.filter(s => s.id !== DEFAULT_SCHOOL_ID).map((school) => (
-              <option key={school.id} value={school.id}>
-                {school.name}
-              </option>
-            ))}
-          </select>
 
           {/* 관리자 로그인 */}
           {!isAdmin && !showAdminLogin && (
@@ -1727,20 +1579,18 @@ export default function App() {
           {!isAdmin && showAdminLogin && (
             <div className="admin-login-box" style={{ marginTop: "12px" }}>
               <div className="admin-login-header">
-                <span>🔐 {selectedSchoolId ? (schools.find(s => s.id === selectedSchoolId)?.name || "학교") : "기본 (개발자)"} 관리자</span>
+                <span>🔐 관리자 로그인</span>
                 <button className="admin-login-close" onClick={() => { setShowAdminLogin(false); setAdminPassword(""); }}>✕</button>
               </div>
               <div className="admin-login-input-row">
                 <input
                   type="password"
-                  placeholder="비밀번호를 입력하세요"
+                  placeholder="관리자 비밀번호"
                   value={adminPassword}
                   onChange={(e) => setAdminPassword(e.target.value)}
-                  onKeyDown={(e) => {
+                  onKeyDown={async (e) => {
                     if (e.key === "Enter" && adminPassword) {
-                      handleAdminLogin(selectedSchoolId || DEFAULT_SCHOOL_ID, adminPassword);
-                      setAdminPassword("");
-                      setShowAdminLogin(false);
+                      await handleAdminLogin(adminPassword);
                     }
                   }}
                   className="admin-login-input"
@@ -1749,11 +1599,7 @@ export default function App() {
                 <button
                   className="admin-login-submit"
                   disabled={!adminPassword}
-                  onClick={() => {
-                    handleAdminLogin(selectedSchoolId || DEFAULT_SCHOOL_ID, adminPassword);
-                    setAdminPassword("");
-                    setShowAdminLogin(false);
-                  }}
+                  onClick={() => handleAdminLogin(adminPassword)}
                 >
                   확인
                 </button>
@@ -1768,25 +1614,18 @@ export default function App() {
               style={{ marginTop: "12px" }}
               onClick={() => {
                 setIsAdmin(false);
-                setShowAdminLogin(false);
+                // 서버 데이터 비우고 로컬 데이터로 전환
+                for (let i = 1; i <= 6; i++) {
+                  classifiersRef.current[i]?.clear();
+                }
+                mergeLocalStorage();
+                forceUpdate(n => n + 1);
                 showToast("관리자 로그아웃");
               }}
             >
               🔓 관리자 로그아웃
             </button>
           )}
-
-          {/* 학교 생성 (관리자 전용) */}
-          {isAdmin && (<button
-            className="setting-btn"
-            style={{ marginTop: "8px" }}
-            onClick={async () => {
-              const result = await showModal({ type: "prompt2", title: "새 학교 등록", message: "학교 이름과 관리자 비밀번호를 입력하세요.", placeholder: "학교 이름", placeholder2: "관리자 비밀번호" });
-              if (result) handleCreateSchool(result.val1, result.val2);
-            }}
-          >
-            ➕ 새 학교 등록
-          </button>)}
 
           {dataLoading && (
             <p style={{ color: "var(--text2)", fontSize: "13px", marginTop: "8px" }}>
@@ -1810,7 +1649,7 @@ export default function App() {
             onChange={(e) => {
               const newId = e.target.value;
               setSelectedCameraId(newId);
-              localStorage.setItem("swim_camera_id", newId);
+              localStorage.setItem("exercise_camera_id", newId);
               showToast("카메라가 변경되었습니다");
             }}
             style={{
@@ -1844,10 +1683,10 @@ export default function App() {
           </button>
         </div>
 
-        {/* 데이터 관리 (관리자 전용) */}
-        {isAdmin && (<div className="settings-section">
+        {/* 학습 데이터 관리 */}
+        <div className="settings-section">
           <h3>학습 데이터</h3>
-          {Object.entries(MOTIONS).map(([id, m]) => {
+          {Object.entries(MOTIONS).filter(([, m]) => !m.hidden).map(([id, m]) => {
             const clf = classifiersRef.current[id];
             const counts = clf?.getSampleCounts() || {};
             const total = clf?.totalSamples || 0;
@@ -1879,100 +1718,62 @@ export default function App() {
                     );
                   })}
                 </div>
-                <div className="dm-actions">
-                  <button
-                    onClick={() => {
-                      const data = clf?.export();
-                      if (data) {
-                        const blob = new Blob([data], { type: "application/json" });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = `swim_knn_${id}.json`;
-                        a.click();
-                        showToast("내보내기 완료");
-                      }
-                    }}
-                  >
-                    내보내기
-                  </button>
-                  <button
-                    disabled={dataLoading || total === 0}
-                    onClick={async () => {
-                      const ok = await showModal({ title: `${m.name} 업로드`, message: "서버에 추가합니다. (기존 데이터 유지)" });
-                      if (ok) handleUploadToSupabase(parseInt(id), false);
-                    }}
-                  >
-                    ☁️ 추가
-                  </button>
-                  <button
-                    disabled={dataLoading || total === 0}
-                    onClick={async () => {
-                      const ok = await showModal({ title: `${m.name} 덮어쓰기`, message: "서버의 기존 데이터를 삭제하고 새로 업로드합니다.", danger: true });
-                      if (ok) handleUploadToSupabase(parseInt(id), true);
-                    }}
-                  >
-                    🔄 덮어쓰기
-                  </button>
-                  <button
-                    className="delete"
-                    onClick={async () => {
-                      const ok = await showModal({ title: "데이터 삭제", message: `${m.name}의 모든 학습 데이터를 삭제할까요?`, danger: true });
-                      if (ok) {
-                        clf?.clear();
-                        localStorage.removeItem(`swim_knn_${id}`);
-                        showToast("삭제 완료");
-                        forceUpdate(n => n + 1);
-                      }
-                    }}
-                  >
-                    삭제
-                  </button>
-                </div>
+                {total > 0 && (
+                  <div className="dm-actions">
+                    <button
+                      onClick={() => {
+                        const data = clf?.export();
+                        if (data) {
+                          const blob = new Blob([data], { type: "application/json" });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `exercise_knn_${id}.json`;
+                          a.click();
+                          showToast("내보내기 완료");
+                        }
+                      }}
+                    >
+                      내보내기
+                    </button>
+                    <button
+                      className="delete"
+                      onClick={async () => {
+                        const ok = await showModal({ title: "데이터 삭제", message: `${m.name}의 모든 학습 데이터를 삭제할까요?`, danger: true });
+                        if (ok) {
+                          await handleDeleteTrainingData(parseInt(id));
+                        }
+                      }}
+                    >
+                      삭제
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
-        </div>)}
+        </div>
 
-        {isAdmin && (<div className="settings-section">
-          <h3>전체 데이터</h3>
-          <button
-            className="setting-btn primary"
-            onClick={async () => {
-              const ok = await showModal({ title: "전체 추가 업로드", message: "모든 로컬 학습 데이터를 서버에 추가합니다.\n기존 서버 데이터는 유지됩니다." });
-              if (ok) handleUploadToSupabase(null, false);
-            }}
-            disabled={dataLoading}
-          >
-            {dataLoading ? "⏳ 업로드 중..." : "☁️ 전체 추가 업로드"}
-          </button>
-          <button
-            className="setting-btn"
-            onClick={async () => {
-              const ok = await showModal({ title: "전체 덮어쓰기", message: "서버의 기존 데이터를 모두 삭제하고\n로컬 데이터로 새로 업로드합니다.", danger: true });
-              if (ok) handleUploadToSupabase(null, true);
-            }}
-            disabled={dataLoading}
-          >
-            🔄 전체 덮어쓰기
-          </button>
+        {/* 데이터 백업/복원 */}
+        <div className="settings-section">
+          <h3>데이터 백업</h3>
           <button
             className="setting-btn"
             onClick={() => {
               const allData = {};
               for (let i = 1; i <= 6; i++) {
-                const d = localStorage.getItem(`swim_knn_${i}`);
-                if (d) allData[`swim_knn_${i}`] = d;
+                const d = localStorage.getItem(`exercise_knn_${i}`);
+                if (d) allData[`exercise_knn_${i}`] = d;
               }
-              allData.swim_history = localStorage.getItem("swim_history") || "[]";
+              allData.exercise_history = localStorage.getItem("exercise_history") || "[]";
 
               const blob = new Blob([JSON.stringify(allData, null, 2)], { type: "application/json" });
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = url;
-              a.download = `swim_trainer_backup_${new Date().toISOString().slice(0, 10)}.json`;
+              a.download = `exercise_coach_backup_${new Date().toISOString().slice(0, 10)}.json`;
               a.click();
-              showToast("전체 백업 완료");
+              showToast("백업 완료");
             }}
           >
             📤 전체 내보내기
@@ -1996,7 +1797,7 @@ export default function App() {
                     }
                     // 분류기 다시 로드
                     for (let i = 1; i <= 6; i++) {
-                      const saved = localStorage.getItem(`swim_knn_${i}`);
+                      const saved = localStorage.getItem(`exercise_knn_${i}`);
                       if (saved) {
                         classifiersRef.current[i].import(saved);
                       }
@@ -2021,10 +1822,9 @@ export default function App() {
               const ok = await showModal({ title: "전체 삭제", message: "모든 데이터(학습 데이터 + 연습 기록)를 삭제할까요?\n이 작업은 되돌릴 수 없습니다.", danger: true });
               if (ok) {
                 for (let i = 1; i <= 6; i++) {
-                  localStorage.removeItem(`swim_knn_${i}`);
-                  classifiersRef.current[i]?.clear();
+                  await handleDeleteTrainingData(i);
                 }
-                localStorage.removeItem("swim_history");
+                localStorage.removeItem("exercise_history");
                 showToast("전체 삭제 완료");
                 forceUpdate(n => n + 1);
               }
@@ -2032,7 +1832,7 @@ export default function App() {
           >
             🗑 전체 삭제
           </button>
-        </div>)}
+        </div>
 
       </div>
     );

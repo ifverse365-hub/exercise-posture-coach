@@ -16,8 +16,8 @@ const App = dynamic(() => import("@/components/App"), {
         gap: 16,
       }}
     >
-      <div style={{ fontSize: 56 }}>🏊</div>
-      <div style={{ fontSize: 20, fontWeight: 700 }}>생존수영 트레이너</div>
+      <div style={{ fontSize: 56 }}>💪</div>
+      <div style={{ fontSize: 20, fontWeight: 700 }}>AI 운동 자세 코치</div>
       <div style={{ fontSize: 13, color: "#94a3b8" }}>
         AI 모델을 불러오는 중...
       </div>

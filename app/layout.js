@@ -1,12 +1,12 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "생존수영 트레이너",
-  description: "AI 기반 실시간 생존수영 동작 분석 시스템",
+  title: "AI 운동 자세 코치",
+  description: "AI 기반 실시간 운동 자세 분석 시스템",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "생존수영",
+    title: "운동코치",
   },
 };
 
