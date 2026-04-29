@@ -147,9 +147,26 @@ export default function App() {
         classifiersRef.current[i] = new KNNClassifier(5);
       }
 
-      // localStorage에서 학습 데이터 로드 (개인 사용자용)
+      // Supabase에서 서버 학습 데이터 로드 (모든 사용자 공유)
+      try {
+        for (let i = 1; i <= 6; i++) {
+          const data = await getTrainingDataByMotion(i);
+          const m = MOTIONS[i];
+          for (const item of data) {
+            const stepName = m.steps[item.step_index];
+            if (stepName && item.features) {
+              classifiersRef.current[i].addSample(stepName, item.features);
+            }
+          }
+        }
+        console.log("Training data loaded from Supabase");
+      } catch (err) {
+        console.error("Failed to load server training data:", err);
+      }
+
+      // localStorage에서 개인 학습 데이터 병합
       mergeLocalStorage();
-      console.log("Training data loaded from localStorage");
+      console.log("Local training data merged");
       setDataLoading(false);
 
       // MediaPipe 로드
@@ -1506,6 +1523,93 @@ export default function App() {
     forceUpdate(n => n + 1);
   }
 
+  // 로컬 학습 데이터를 서버에 업로드 (관리자 전용)
+  async function uploadLocalDataToServer() {
+    if (!isAdmin) {
+      showToast("관리자 권한이 필요합니다", "error");
+      return;
+    }
+
+    // 로컬 데이터가 있는지 확인
+    let localCount = 0;
+    for (let i = 1; i <= 6; i++) {
+      const saved = localStorage.getItem(`exercise_knn_${i}`);
+      if (!saved) continue;
+      try {
+        const localSamples = JSON.parse(saved);
+        for (const features of Object.values(localSamples)) {
+          localCount += features.length;
+        }
+      } catch (e) {}
+    }
+
+    if (localCount === 0) {
+      showToast("업로드할 로컬 데이터가 없습니다");
+      return;
+    }
+
+    if (!confirm(`로컬에 저장된 ${localCount}개 샘플을 서버에 업로드합니다.\n업로드 후 로컬 데이터는 삭제됩니다.\n계속하시겠습니까?`)) return;
+
+    setDataLoading(true);
+    setLoadingMsg("로컬 데이터 업로드 중...");
+
+    let totalUploaded = 0;
+    let totalFailed = 0;
+
+    try {
+      for (let i = 1; i <= 6; i++) {
+        const saved = localStorage.getItem(`exercise_knn_${i}`);
+        if (!saved) continue;
+
+        const m = MOTIONS[i];
+        try {
+          const localSamples = JSON.parse(saved);
+          for (const [label, features] of Object.entries(localSamples)) {
+            const stepIndex = m.steps.indexOf(label);
+            if (stepIndex < 0) continue;
+
+            for (const feat of features) {
+              const result = await saveTrainingData(i, stepIndex, feat);
+              if (result) totalUploaded++;
+              else totalFailed++;
+            }
+          }
+          // 업로드 성공 후 로컬 데이터 삭제 (중복 방지)
+          localStorage.removeItem(`exercise_knn_${i}`);
+        } catch (e) {
+          console.error(`Failed to upload motion ${i}:`, e);
+          totalFailed++;
+        }
+      }
+
+      // 서버에서 데이터 다시 로드하여 분류기 갱신
+      for (let i = 1; i <= 6; i++) {
+        classifiersRef.current[i]?.clear();
+        const data = await getTrainingDataByMotion(i);
+        const m = MOTIONS[i];
+        for (const item of data) {
+          const stepName = m.steps[item.step_index];
+          if (stepName && item.features) {
+            classifiersRef.current[i].addSample(stepName, item.features);
+          }
+        }
+      }
+
+      if (totalFailed > 0) {
+        showToast(`업로드 완료: ${totalUploaded}개 성공, ${totalFailed}개 실패`, "error");
+      } else {
+        showToast(`✅ ${totalUploaded}개 샘플 서버 업로드 완료`);
+      }
+    } catch (err) {
+      console.error("Upload failed:", err);
+      showToast("업로드 실패", "error");
+    }
+
+    setDataLoading(false);
+    setLoadingMsg("");
+    forceUpdate(n => n + 1);
+  }
+
   // 관리자 로그인
   async function handleAdminLogin(password) {
     // 간단한 비밀번호 검증 (실제로는 환경변수나 서버에서 검증)
@@ -1605,6 +1709,18 @@ export default function App() {
                 </button>
               </div>
             </div>
+          )}
+
+          {/* 관리자 전용 - 로컬 데이터 서버 업로드 */}
+          {isAdmin && (
+            <button
+              className="setting-btn"
+              style={{ marginTop: "12px" }}
+              onClick={uploadLocalDataToServer}
+              disabled={dataLoading}
+            >
+              📤 로컬 데이터 서버에 업로드
+            </button>
           )}
 
           {/* 관리자 로그아웃 */}
